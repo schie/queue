@@ -1,0 +1,29 @@
+# Root config files
+.npmignore
+.gitignore
+.gitattributes
+.prettierrc
+.eslintrc*
+*.tsbuildinfo
+
+# CI/CD & tooling
+.github/
+.vscode/
+.husky/
+.env
+*.env*
+
+# Tests and coverage
+__tests__/
+coverage/
+*.test.ts
+*.spec.ts
+
+# Docs & meta
+*.md
+*.log
+LICENSE
+CHANGELOG.md
+
+# Node internals
+node_modules/
