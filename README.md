@@ -99,7 +99,7 @@ new Queue(options?: QueueOptions);
 
 ### Methods
 
-- `addTask(task: () => Promise<void>)` — enqueue a task; auto-starts if idle and auto-resurrects after cancellation.
+- `addTask(task: () => Promise<void>, dedupeKey?: string)` — enqueue a task; if `dedupeKey` matches the last pending task key, skip enqueueing; auto-starts if idle and auto-resurrects after cancellation.
 - `pauseQueue()` — transition to `Paused` if currently processing.
 - `resumeQueue()` — clears `lastTaskError`, transitions back to `Processing`, and unblocks paused processing. Also restarts if idle with pending work.
 - `cancelQueue()` — set status to `Cancelled`, flush pending tasks, and invalidate any in-flight runner.

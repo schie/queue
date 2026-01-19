@@ -18,13 +18,19 @@ export interface QueueOptions {
   pauseOnError?: boolean
 }
 
+type QueueEntry = {
+  task: () => Promise<void>
+  key?: string
+}
+
 export class Queue {
-  private queue: Array<() => Promise<void>> = []
+  private queue: QueueEntry[] = []
   private _status: QueueStatus = QueueStatus.Idle
   private runner: Promise<void> | null = null
   private resumeResolve: (() => void) | null = null
   private lastError: Error | null = null
   private pauseOnError: boolean
+  private currentTaskKey?: string
 
   // generation token to avoid status races across cancel/resurrects
   private version = 0
@@ -103,9 +109,16 @@ export class Queue {
 
   /**
    * Enqueues a new task and starts processing if idle, resurrecting a cancelled queue.
+   *
+   * When a dedupeKey is provided, the queue skips enqueueing if the last pending task (or the
+   * currently running task when no tasks are pending) has the same key. This keeps only
+   * adjacent duplicates out of the queue while leaving non-adjacent repeats untouched.
+   *
+   * @param task - Async task function to run in-order when it reaches the front of the queue.
+   * @param dedupeKey - Optional identifier used to dedupe adjacent tasks with the same key.
    */
-  public addTask(task: () => Promise<void>) {
-    this.enqueue(task, 'end')
+  public addTask(task: () => Promise<void>, dedupeKey?: string) {
+    this.enqueue(task, 'end', dedupeKey)
   }
 
   /**
@@ -115,7 +128,7 @@ export class Queue {
     this.enqueue(task, 'front')
   }
 
-  private enqueue(task: () => Promise<void>, position: 'front' | 'end') {
+  private enqueue(task: () => Promise<void>, position: 'front' | 'end', dedupeKey?: string) {
     // Auto-resurrect if previously cancelled
     if (this.isCancelled) {
       this.version++ // bump generation to invalidate old runner
@@ -123,10 +136,19 @@ export class Queue {
       this.onStatusChange?.(QueueStatus.Idle)
     }
 
+    if (position === 'end' && dedupeKey) {
+      const lastKey =
+        this.queue.length > 0 ? this.queue[this.queue.length - 1]?.key : this.currentTaskKey
+      if (lastKey === dedupeKey) {
+        if (this._status === QueueStatus.Idle && this.queue.length > 0) this.startRunner()
+        return
+      }
+    }
+
     if (position === 'front') {
-      this.queue.unshift(task)
+      this.queue.unshift({ task, key: dedupeKey })
     } else {
-      this.queue.push(task)
+      this.queue.push({ task, key: dedupeKey })
     }
     if (this._status === QueueStatus.Idle) this.startRunner()
   }
@@ -158,6 +180,7 @@ export class Queue {
     if (this.isCancelled) return
     this.setStatus(QueueStatus.Cancelled)
     this.queue = []
+    this.currentTaskKey = undefined
     this.version++ // invalidate any in-flight runner’s ability to change status later
     this.resumeResolve?.() // unblock pause
     this.resumeResolve = null
@@ -169,6 +192,7 @@ export class Queue {
   public clearQueue() {
     this.queue = []
     if (!this.isProcessing && !this.isPaused && !this.isCancelled) {
+      this.currentTaskKey = undefined
       this.setStatus(QueueStatus.Idle)
     }
   }
@@ -193,14 +217,16 @@ export class Queue {
         continue
       }
 
-      const task = this.queue.shift()
-      if (!task) break
+      const entry = this.queue.shift()
+      if (!entry) break
 
       if (this.isCancelled || this.version !== currentVersion) break
 
+      this.currentTaskKey = entry.key
       try {
-        await task()
+        await entry.task()
       } catch (err) {
+        this.currentTaskKey = undefined
         if (this.pauseOnError) {
           this.lastError = err instanceof Error ? err : new Error(String(err))
           this.setStatus(QueueStatus.Paused)
@@ -208,6 +234,7 @@ export class Queue {
           continue
         }
       }
+      this.currentTaskKey = undefined
     }
 
     // Only the active generation may set final status

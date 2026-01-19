@@ -37,6 +37,34 @@ describe('Queue', () => {
     expect(queue.size).toBe(0)
   })
 
+  test('skips adjacent duplicate keys when adding tasks', async () => {
+    const outputs: string[] = []
+    const queue = new Queue()
+
+    queue.addTask(async () => outputs.push('first'), 'alpha')
+    queue.addTask(async () => outputs.push('skip'), 'alpha')
+    queue.addTask(async () => outputs.push('second'), 'beta')
+    queue.addTask(async () => outputs.push('third'), 'alpha')
+
+    await waitFor(() => queue.isIdle && outputs.length === 3)
+
+    expect(outputs).toEqual(['first', 'second', 'third'])
+  })
+
+  test('skipping duplicates while idle still starts queued work', async () => {
+    const outputs: string[] = []
+    const queue = new Queue()
+
+    ;(queue as any)._status = QueueStatus.Idle
+    ;(queue as any).queue = [{ task: async () => outputs.push('existing'), key: 'alpha' }]
+
+    queue.addTask(async () => outputs.push('skipped'), 'alpha')
+
+    await waitFor(() => queue.isIdle && outputs.length === 1)
+
+    expect(outputs).toEqual(['existing'])
+  })
+
   test('pauses and resumes processing, clearing errors when resuming', async () => {
     const statuses: QueueStatus[] = []
     const processed: number[] = []
@@ -232,7 +260,7 @@ describe('Queue', () => {
   test('process loop bails when cancellation occurs between pulls', async () => {
     const queue = new Queue()
     const spy = jest.fn()
-    const tasks = (queue as any).queue as Array<() => Promise<void>>
+    const tasks = (queue as any).queue as Array<{ task: () => Promise<void> }>
     const originalShift = tasks.shift.bind(tasks)
     tasks.shift = () => {
       queue.cancelQueue()
